@@ -14,6 +14,8 @@ from datetime import datetime as dt, timedelta
 
 import json
 
+import concurrent.futures as cf
+
 from pyspark.sql import SparkSession, types as T, functions as F
 from pyspark import SparkConf
 
@@ -111,6 +113,16 @@ tasks = [
     }
 ]
 
+tasks = [
+    {
+        "sourceFields": [],
+        "connectorOperator": {
+            "S3": "NO_OP"
+        },
+        "taskType": "Map_all"
+    }
+]
+
 trigger_config = {
     'triggerType':'OnDemand'
 }
@@ -143,7 +155,7 @@ print ('########TASK01-PARAMETERS-INITIALIZED-COMPLETED-SUCCESSFULLY########')
 print ("STARTED TASK03 UDFs AND Class Defination")
 
 class AppFlowWrapper:
-    def __init__(self, flow_name, flow_client):
+    def __init__(self, flow_name, flow_client, flow_config, max_retries):
         """
         Initialize the AppFlowWrapper with a Boto3 AppFlow client supplied externally.
 
@@ -152,7 +164,10 @@ class AppFlowWrapper:
         """
         self.flow_name = flow_name
         self.client = flow_client
+        self.flow_config = flow_config
         self.execution_id = None
+        self.retry = 0
+        self.max_retries = max_retries
         
     def flow_exists(self):
         """
@@ -164,11 +179,11 @@ class AppFlowWrapper:
         flow_name = self.flow_name
         try:
             self.client.describe_flow(flowName=flow_name)
-        except self.client.exceptions.ResourceNotFoundException:
-            print(f"Resource not found error while checking flow '{flow_name}': {e}")
+        except self.client.exceptions.ResourceNotFoundException as rnfe:
+            print(f"Resource not found error while checking flow '{flow_name}': {rnfe}")
             return False
-        except self.client.exceptions.InternalServerException as e:
-            print(f"Internal server error while checking flow '{flow_name}': {e}")
+        except self.client.exceptions.InternalServerException as ise:
+            print(f"Internal server error while checking flow '{flow_name}': {ise}")
             return False
         except Exception as e:
             print (f"Error checking if flow '{flow_name}' exists: {e}")
@@ -194,17 +209,17 @@ class AppFlowWrapper:
             print(f"Started flow '{flow_name}'. Execution ID: {execution_id}")
             self.execution_id = execution_id
             self.execution_start_time = time.time()
-        except self.client.exceptions.ResourceNotFoundException as e:
-            print(f"Flow '{flow_name}' not found: {e}")
+        except self.client.exceptions.ResourceNotFoundException as rnfe:
+            print(f"Flow '{flow_name}' not found: {rnfe}")
             return False
-        except self.client.exceptions.InternalServerException as e:
-            print(f"Internal server error while starting flow '{flow_name}': {e}")
+        except self.client.exceptions.InternalServerException as ise:
+            print(f"Internal server error while starting flow '{flow_name}': {ise}")
             return False
-        except self.client.exceptions.ServiceQuotaExceededException as e:
-            print(f"Service quota exceeded for flow '{flow_name}': {e}")
+        except self.client.exceptions.ServiceQuotaExceededException as sqee:
+            print(f"Service quota exceeded for flow '{flow_name}': {sqee}")
             return False
-        except self.client.exceptions.ConflictException as e:
-            print(f"Conflict occurred while starting flow '{flow_name}': {e}")
+        except self.client.exceptions.ConflictException as ce:
+            print(f"Conflict occurred while starting flow '{flow_name}': {ce}")
             return False
         except Exception as e:
             print (f"Error in starting flow '{flow_name}': {e}")
@@ -244,12 +259,12 @@ class AppFlowWrapper:
                     if flow_execution.get('executionId')==execution_id:
                         print (flow_execution)
                         execution_status = flow_execution.get('executionStatus')
-        except self.client.exceptions.ValidationException as e:
-            print(f"Validation error while fetching status for execution '{execution_id}': {e}")
-        except self.client.exceptions.ResourceNotFoundException as e:
-            print(f"Flow '{flow_name}' or execution '{execution_id}' not found: {e}")
-        except self.client.exceptions.InternalServerException as e:
-            print(f"Internal server error while fetching execution status: {e}")
+        except self.client.exceptions.ValidationException as ve:
+            print(f"Validation error while fetching status for execution '{execution_id}': {ve}")
+        except self.client.exceptions.ResourceNotFoundException as rnfe:
+            print(f"Flow '{flow_name}' or execution '{execution_id}' not found: {rnfe}")
+        except self.client.exceptions.InternalServerException as ise:
+            print(f"Internal server error while fetching execution status: {ise}")
         except Exception as e:
             print(f"Error retrieving execution status for '{execution_id}': {e}")
         finally:
@@ -278,29 +293,29 @@ class AppFlowWrapper:
             )
             print(f"Flow '{flow_name}' created successfully.")
             print (response)
-        except self.client.exceptions.ValidationException as e:
-            print(f"Validation error while creating flow '{flow_name}': {e}")
+        except self.client.exceptions.ValidationException as ve:
+            print(f"Validation error while creating flow '{flow_name}': {ve}")
             return False
-        except self.client.exceptions.InternalServerException as e:
-            print(f"Internal server error while creating flow '{flow_name}': {e}")
+        except self.client.exceptions.InternalServerException as ise:
+            print(f"Internal server error while creating flow '{flow_name}': {ise}")
             return False
-        except self.client.exceptions.ResourceNotFoundException as e:
-            print(f"Resource not found for flow '{flow_name}': {e}")
+        except self.client.exceptions.ResourceNotFoundException as rnfe:
+            print(f"Resource not found for flow '{flow_name}': {rnfe}")
             return False
-        except self.client.exceptions.ServiceQuotaExceededException as e:
-            print(f"Service quota exceeded while creating flow '{flow_name}': {e}")
+        except self.client.exceptions.ServiceQuotaExceededException as sqee:
+            print(f"Service quota exceeded while creating flow '{flow_name}': {sqee}")
             return False
-        except self.client.exceptions.ConflictException as e:
-            print(f"Conflict error while creating flow '{flow_name}': {e}")
+        except self.client.exceptions.ConflictException as ce:
+            print(f"Conflict error while creating flow '{flow_name}': {ce}")
             return False
-        except self.client.exceptions.ConnectorAuthenticationException as e:
-            print(f"Connector authentication error for flow '{flow_name}': {e}")
+        except self.client.exceptions.ConnectorAuthenticationException as cae:
+            print(f"Connector authentication error for flow '{flow_name}': {cae}")
             return False
-        except self.client.exceptions.ConnectorServerException as e:
-            print(f"Connector server error while creating flow '{flow_name}': {e}")
+        except self.client.exceptions.ConnectorServerException as cse:
+            print(f"Connector server error while creating flow '{flow_name}': {cse}")
             return False
-        except self.client.exceptions.AccessDeniedException as e:
-            print(f"Access denied while creating flow '{flow_name}': {e}")
+        except self.client.exceptions.AccessDeniedException as ade:
+            print(f"Access denied while creating flow '{flow_name}': {ade}")
             return False
         except Exception as e:
             raise Exception(f"Unexpected error while creating flow '{flow_name}': {e}")
@@ -322,33 +337,33 @@ class AppFlowWrapper:
             )
             print(f"Flow '{flow_name}' updated successfully.")
             print (response)
-        except self.client.exceptions.ResourceNotFoundException as e:
-            print(f"Flow '{flow_name}' not found: {e}")
+        except self.client.exceptions.ResourceNotFoundException as rnfe:
+            print(f"Flow '{flow_name}' not found: {rnfe}")
             return False
-        except self.client.exceptions.ServiceQuotaExceededException as e:
-            print(f"Service quota exceeded while updating flow '{flow_name}': {e}")
+        except self.client.exceptions.ServiceQuotaExceededException as sqee:
+            print(f"Service quota exceeded while updating flow '{flow_name}': {sqee}")
             return False
-        except self.client.exceptions.ConflictException as e:
-            print(f"Conflict occurred while updating flow '{flow_name}': {e}")
+        except self.client.exceptions.ConflictException as ce:
+            print(f"Conflict occurred while updating flow '{flow_name}': {ce}")
             return False
-        except self.client.exceptions.ConnectorAuthenticationException as e:
-            print(f"Connector authentication error for flow '{flow_name}': {e}")
+        except self.client.exceptions.ConnectorAuthenticationException as cae:
+            print(f"Connector authentication error for flow '{flow_name}': {cae}")
             return False
-        except self.client.exceptions.ConnectorServerException as e:
-            print(f"Connector server error for flow '{flow_name}': {e}")
+        except self.client.exceptions.ConnectorServerException as cse:
+            print(f"Connector server error for flow '{flow_name}': {cse}")
             return False
-        except self.client.exceptions.InternalServerException as e:
-            print(f"Internal server error while updating flow '{flow_name}': {e}")
+        except self.client.exceptions.InternalServerException as ise:
+            print(f"Internal server error while updating flow '{flow_name}': {ise}")
             return False
-        except self.client.exceptions.AccessDeniedException as e:
-            print(f"Access denied while updating flow '{flow_name}': {e}")
+        except self.client.exceptions.AccessDeniedException as ade:
+            print(f"Access denied while updating flow '{flow_name}': {ade}")
             return False
         except Exception as e:
             raise (f"Failed to update flow '{flow_name}': {e}")
         else:
             return True
         
-    def create_or_update_flow(self, flow_config):
+    def create_or_update_flow(self):
         """
         Create a new flow or update an existing flow.
 
@@ -356,6 +371,7 @@ class AppFlowWrapper:
         :param flow_config: A dictionary containing the flow configuration.
         :return: True if the flow was created or updated successfully, False otherwise.
         """
+        flow_config = self.flow_config
         flow_name = self.flow_name
         try:
             if self.flow_exists():
@@ -371,7 +387,7 @@ class AppFlowWrapper:
         else:
             return True
         
-    def in_terminal_sate(self):
+    def in_terminal_state(self):
         """
         Check if a flow execution has reached terminal state or not.
 
@@ -390,12 +406,60 @@ class AppFlowWrapper:
                 return True
             else:
                 return False
+    
+    def create_and_start(self):
+        self.create_or_update_flow()
+        self.start_flow()
+        self.get_execution_status()
+        print (f'retry : {self.retry}')
+        self.retry = self.retry + 1
+        
+    def excetion_monitor_and_retry(self):
+        while(self.retry<=self.max_retries):
+            state = self.in_terminal_state()
+            while(state!=True):
+                state = self.in_terminal_state()
+                print (state)
+                time.sleep(1)
+            if self.execution_status=='Successful':
+                return True
+        return False
 
+def split_array(arr, n):
+    length = len(arr)
+    base_size = length // n
+    remainder = length % n
+    
+    result = []
+    start = 0
+
+    for i in range(n):
+        part_size = base_size + 1 if i < remainder else base_size
+        result.append(arr[start:start + part_size])
+        start += part_size
+
+    return result
 
 #%% 
 # Execution:
+'''
+with cf.ThreadPoolExecutor(max_workers=4) as executor:
+    # Submitting tasks to the thread pool
+    futures = [executor.submit(process, i) for i in range(1,4)]
 
-    
+    # Collecting results once threads complete
+    for future in cf.as_completed(futures):
+        print(f"Task result: {future.result()}")
 
 #################
+'''
+with cf.ThreadPoolExecutor(max_workers=4) as executor:
+    tasks_groups = split_array(tasks, 4)
+    # Submitting tasks to the thread pool
+    
+    for tasks_group in tasks_groups:
+        futures = [executor.submit(task., i) for task in tasks_group]
+        # Collecting results once threads complete
+        for future in cf.as_completed(futures):
+            print(f"Task result: {future.result()}")
 
