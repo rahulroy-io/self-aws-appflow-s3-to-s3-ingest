@@ -168,6 +168,8 @@ class AppFlowWrapper:
         self.execution_id = None
         self.retry = 0
         self.max_retries = max_retries
+        self.execution_completed = False
+        self.started = False
         
     def flow_exists(self):
         """
@@ -250,15 +252,16 @@ class AppFlowWrapper:
                 if flow_execution.get('executionId')==execution_id:
                     print (flow_execution)
                     execution_status = flow_execution.get('executionStatus')
-
-            while 'nextToken' in response:
-                next_token = response.get('nextToken')
-                response = appflow_client.describe_flow_execution_records(flowName=flow_name, maxResults=1, nextToken = next_token)
-                flow_executions = response.get('flowExecutions')
-                for flow_execution in flow_executions:
-                    if flow_execution.get('executionId')==execution_id:
-                        print (flow_execution)
-                        execution_status = flow_execution.get('executionStatus')
+            if (execution_status==False):
+                while 'nextToken' in response:
+                    next_token = response.get('nextToken')
+                    response = appflow_client.describe_flow_execution_records(flowName=flow_name, maxResults=1, nextToken = next_token)
+                    flow_executions = response.get('flowExecutions')
+                    for flow_execution in flow_executions:
+                        if flow_execution.get('executionId')==execution_id:
+                            print (flow_execution)
+                            execution_status = flow_execution.get('executionStatus')
+                            break
         except self.client.exceptions.ValidationException as ve:
             print(f"Validation error while fetching status for execution '{execution_id}': {ve}")
         except self.client.exceptions.ResourceNotFoundException as rnfe:
@@ -270,12 +273,16 @@ class AppFlowWrapper:
         finally:
             if (execution_status):
                 self.execution_status = execution_status
+                if self.in_terminal_state():
+                    self.execution_completed = True
                 return execution_status
             else:
                 print(f"Execution ID '{execution_id}' not found for flow '{flow_name}'.")
                 #raise Exception((f"Execution ID '{execution_id}' not found for flow '{flow_name}'."))
                 execution_status = 'UnKnown'
                 self.execution_status = execution_status
+                if self.in_terminal_state():
+                    self.execution_completed = True
                 return execution_status
 
     def create_flow(self, flow_config):
@@ -377,11 +384,11 @@ class AppFlowWrapper:
             if self.flow_exists():
                 print(f"Flow '{flow_name}' exists. Updating...")
                 self.update_flow(flow_config)
-                print(f"Flow '{flow_name}' updated successfully.")
+                #print(f"Flow '{flow_name}' updated successfully.")
             else:
                 print(f"Flow '{flow_name}' does not exist. Creating...")
                 self.create_flow(flow_config)
-                print(f"Flow '{flow_name}' created successfully.")
+                #print(f"Flow '{flow_name}' created successfully.")
         except ClientError as e:
             raise (f"Failed to create or update flow '{flow_name}': {e}")
         else:
@@ -396,7 +403,7 @@ class AppFlowWrapper:
         """
         flow_name = self.flow_name
         try:
-            flow_status = self.get_execution_status()
+            flow_status = self.execution_status
         except Exception as e:
             print (f"Error checking flow '{flow_name}' status exists: {e}")
             #raise (f"Error checking if flow '{flow_name}' exists: {e}")
@@ -408,22 +415,27 @@ class AppFlowWrapper:
                 return False
     
     def create_and_start(self):
-        self.create_or_update_flow()
-        self.start_flow()
-        self.get_execution_status()
-        print (f'retry : {self.retry}')
-        self.retry = self.retry + 1
+        if (self.execution_completed==False):
+            self.create_or_update_flow()
+            self.start_flow()
+            self.get_execution_status()
+            print (f'retry : {self.retry}')
+            self.retry = self.retry + 1
+            self.started = True
         
     def excetion_monitor_and_retry(self):
-        while(self.retry<=self.max_retries):
-            state = self.in_terminal_state()
-            while(state!=True):
-                state = self.in_terminal_state()
-                print (state)
-                time.sleep(1)
-            if self.execution_status=='Successful':
-                return True
-        return False
+        self.get_execution_status()
+        if self.execution_status=='Successful':
+            return (True, self.execution_status)
+        else:
+            if self.retry<self.max_retries:
+                if self.execution_status in ['Error', 'CancelStarted', 'Canceled']:
+                    print ("Restarting Flow")
+                    self.create_and_start()
+                else:
+                    return (False, self.execution_status)
+            else:
+                return (True, self.execution_status)
 
 def split_array(arr, n):
     length = len(arr)
@@ -442,24 +454,56 @@ def split_array(arr, n):
 
 #%% 
 # Execution:
-'''
-with cf.ThreadPoolExecutor(max_workers=4) as executor:
-    # Submitting tasks to the thread pool
-    futures = [executor.submit(process, i) for i in range(1,4)]
+flow_tasks = [AppFlowWrapper(flow_name, appflow_client, flow_config, max_retries=3) for _ in range(40)]
 
-    # Collecting results once threads complete
-    for future in cf.as_completed(futures):
-        print(f"Task result: {future.result()}")
+# with cf.ThreadPoolExecutor(max_workers=4) as executor:
+#     # Submitting tasks to the thread pool
+#     futures = [executor.submit(process, i) for i in range(1,4)]
+
+#     # Collecting results once threads complete
+#     for future in cf.as_completed(futures):
+#         print(f"Task result: {future.result()}")
 
 #################
-'''
-with cf.ThreadPoolExecutor(max_workers=4) as executor:
-    tasks_groups = split_array(tasks, 4)
-    # Submitting tasks to the thread pool
-    
-    for tasks_group in tasks_groups:
-        futures = [executor.submit(task., i) for task in tasks_group]
-        # Collecting results once threads complete
-        for future in cf.as_completed(futures):
-            print(f"Task result: {future.result()}")
 
+# with cf.ThreadPoolExecutor(max_workers=4) as executor:
+#     tasks_groups = split_array(tasks, 4)
+#     # Submitting tasks to the thread pool
+    
+#     for tasks_group in tasks_groups:
+#         futures = [executor.submit(task., i) for task in tasks_group]
+#         # Collecting results once threads complete
+#         for future in cf.as_completed(futures):
+#             print(f"Task result: {future.result()}")
+
+#%% 
+n = 20
+task_queue = flow_tasks  # Queue of 100 tasks
+active_tasks = task_queue[:n]  # Start monitoring the first 10 tasks
+task_queue = task_queue[n:]  # Remove them from the queue
+
+def check_task_status(obj):
+    if obj.started == False:
+        obj.create_and_start()
+        value = obj.excetion_monitor_and_retry()
+        return value
+    else:
+        value = obj.excetion_monitor_and_retry()
+        return value
+    
+while active_tasks:
+    for task in active_tasks[:]:  # Iterate over a copy of the active tasks
+        status = check_task_status(task)
+        print(f"Task {task.execution_id} ------------> {status}")
+        
+        if status[0] == True:
+            active_tasks.remove(task)  # Remove the completed task
+            if task_queue:
+                new_task = task_queue.pop(0)  # Get a new task from the queue
+                active_tasks.append(new_task)
+                print(f"########Started monitoring new task########")
+    
+    # Wait before checking again (simulating API response time)
+    time.sleep(1)
+
+print("All tasks completed.")
