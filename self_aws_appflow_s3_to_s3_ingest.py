@@ -273,7 +273,7 @@ class AppFlowWrapper:
         finally:
             if (execution_status):
                 self.execution_status = execution_status
-                self.records_processed = response.get('executionResult').get('recordsProcessed', 0)
+                self.records_processed = flow_execution.get('executionResult').get('recordsProcessed', 0)
                 if self.in_terminal_state():
                     self.execution_completed = True
                 return execution_status
@@ -282,6 +282,7 @@ class AppFlowWrapper:
                 #raise Exception((f"Execution ID '{execution_id}' not found for flow '{flow_name}'."))
                 execution_status = 'UnKnown'
                 self.execution_status = execution_status
+                self.records_processed = 0
                 if self.in_terminal_state():
                     self.execution_completed = True
                 return execution_status
@@ -427,7 +428,6 @@ class AppFlowWrapper:
     def excetion_monitor_and_retry(self):
         self.get_execution_status()
         if self.execution_status=='Successful':
-            self.record_processed = 
             return (True, self.execution_status)
         else:
             if self.retry<self.max_retries:
@@ -456,7 +456,6 @@ def split_array(arr, n):
 
 #%% 
 # Execution:
-flow_tasks = [AppFlowWrapper(flow_name, appflow_client, flow_config, max_retries=3) for _ in range(10)]
 
 # with cf.ThreadPoolExecutor(max_workers=4) as executor:
 #     # Submitting tasks to the thread pool
@@ -479,7 +478,9 @@ flow_tasks = [AppFlowWrapper(flow_name, appflow_client, flow_config, max_retries
 #             print(f"Task result: {future.result()}")
 
 #%% 
-n = 20
+flow_tasks = [AppFlowWrapper(flow_name, appflow_client, flow_config, max_retries=3) for _ in range(10)]
+
+n = 10
 task_queue = flow_tasks  # Queue of 100 tasks
 active_tasks = task_queue[:n]  # Start monitoring the first 10 tasks
 task_queue = task_queue[n:]  # Remove them from the queue
