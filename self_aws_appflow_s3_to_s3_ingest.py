@@ -273,6 +273,7 @@ class AppFlowWrapper:
         finally:
             if (execution_status):
                 self.execution_status = execution_status
+                self.records_processed = response.get('executionResult').get('recordsProcessed', 0)
                 if self.in_terminal_state():
                     self.execution_completed = True
                 return execution_status
@@ -426,6 +427,7 @@ class AppFlowWrapper:
     def excetion_monitor_and_retry(self):
         self.get_execution_status()
         if self.execution_status=='Successful':
+            self.record_processed = 
             return (True, self.execution_status)
         else:
             if self.retry<self.max_retries:
@@ -454,7 +456,7 @@ def split_array(arr, n):
 
 #%% 
 # Execution:
-flow_tasks = [AppFlowWrapper(flow_name, appflow_client, flow_config, max_retries=3) for _ in range(40)]
+flow_tasks = [AppFlowWrapper(flow_name, appflow_client, flow_config, max_retries=3) for _ in range(10)]
 
 # with cf.ThreadPoolExecutor(max_workers=4) as executor:
 #     # Submitting tasks to the thread pool
